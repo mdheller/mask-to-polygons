@@ -16,8 +16,6 @@ setup(
         'geojson>=2.4.0',
     ],
     packages=[
-        'mask_to_polygons.simplification',
-        'mask_to_polygons.processing',
         'mask_to_polygons',
     ],
 )

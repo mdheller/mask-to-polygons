@@ -1,104 +1,106 @@
-import geojson
 import json
+
+import cv2
+import numpy as np
 import rasterio
-import rasterio.features
-import shapely
+import shapely.affinity
 import shapely.geometry
-from geojson import FeatureCollection
-
-from mask_to_polygons.processing import buildings
-from mask_to_polygons.processing import polygons
+from shapely_geojson import Feature, FeatureCollection, dumps
 
 
-def mask_from_geotiff(mask_filename):
-    with rasterio.open(mask_filename, 'r') as dataset:
-        mask = dataset.read(1)
-    return mask
+def polygons_from_binary(contours, hierarchy, pixel_tolerence):
+    polys = []
+    for contour in contours:
+        poly = shapely.geometry.Polygon([p for p in contour])
+        if pixel_tolerence > 0:
+            poly = poly.simplify(pixel_tolerence, preserve_topology=True)
+        polys.append(poly)
+    return polys
 
 
-def geometries_from_geojson(filename):
-    geo_json = None
-    gs = []
-
-    with open(filename, 'r') as file:
-        geo_json = json.loads(file.read())
-
-    if 'features' in geo_json.keys():
-        for g in geo_json['features']:
-            gs.append(g['geometry'])
-    elif 'geometries' in geo_json.keys():
-        for g in geo_json['geometries']:
-            gs.append(g)
-    else:
-        raise Exception('Unrecognized GeoJSON Format')
-
-    return gs
+def buildings_from_binary(contours, hierarchy):
+    pass
 
 
-def geometries_from_mask(mask,
-                         transform,
-                         mode,
-                         min_aspect_ratio=1.618,
-                         min_area=None,
-                         width_factor=0.5,
-                         thickness=0.001):
-    transform_fn = None
+def geometries_from_mask(mask, thresh, transform, mode, x_offset, y_offset, open_kernel, close_kernel, pixel_tolerence):
+
+    # Ensure transform
     if isinstance(transform, rasterio.transform.Affine):
         pass
     elif isinstance(transform, str):
         with rasterio.open(transform, 'r') as dataset:
             transform = dataset.transform
-    elif callable(transform):
-        # Transform can be function of form f(x, y) which is assumed to convert from
-        # pixel coordinates to (lat, lng)
-        transform_fn = transform
-        transform = rasterio.transform.IDENTITY
-
-    if mode == 'polygons':
-        polys = polygons.get_polygons(mask, transform)
-    elif mode == 'buildings':
-        polys = buildings.get_polygons(mask, transform, min_aspect_ratio,
-                                       min_area, width_factor, thickness)
     else:
-        raise Exception()
+        raise Exception('Bad transform')
 
-    if transform_fn:
-        new_polys = []
-        for p in polys:
-            p = shapely.geometry.shape(p)
-            p = shapely.ops.transform(lambda x, y, z=None: transform_fn(x, y), p)
-            new_polys.append(shapely.geometry.mapping(p))
-        polys = new_polys
+    # Ensure opening kernel
+    if isinstance(open_kernel, int):
+        open_kernel = np.ones((open_kernel, open_kernel), np.uint8)
+    elif not open_kernel:
+        open_kernel = None
+    elif isinstance(open_kernel, np.ndarray):
+        pass
+    else:
+        raise Exception('Bad opening kernel')
 
-    return polys
+    # Ensure closing kernel
+    if isinstance(close_kernel, int):
+        close_kernel = np.ones((close_kernel, close_kernel), np.uint8)
+    elif not close_kernel:
+        close_kernel = None
+    elif isinstance(close_kernel, np.ndarray):
+        pass
+    else:
+        raise Exception('Bad closing kernel')
+
+    # Produce binary image
+    # https://docs.opencv.org/3.4.1/d7/d1b/group__imgproc__misc.html#gae8a4a146d1ca78c626a53577199e9c57
+    _, binary = cv2.threshold(mask, thresh, 0xff, cv2.THRESH_BINARY)
+
+    # Filter
+    # https://docs.opencv.org/3.4.1/d4/d86/group__imgproc__filter.html#ga67493776e3ad1a3df63883829375201f
+    if open_kernel is not None:
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, open_kernel)
+    if close_kernel is not None:
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, close_kernel)
+
+    # Extract contours
+    # https://docs.opencv.org/3.4.1/d3/dc0/group__imgproc__shape.html#ga17ed9f5d79ae97bd4c7cf18403e1689a
+    _, contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+
+    # Offset the contours (apply correct screen space coordinates)
+    offset_contours = []
+    for contour in contours:
+        offset_contour = contour[:, 0, :]
+        offset_contour = offset_contour + np.array([x_offset, y_offset])
+        offset_contours.append(offset_contour)
+
+    # Vectorize according to mode
+    if mode == 'buildings':
+        polys = buildings_from_binary(offset_contours, hierarchy)
+    else:
+        polys = polygons_from_binary(offset_contours, hierarchy, pixel_tolerence)
+
+    # Convert from screen space to world space
+    a = transform[0]
+    b = transform[1]
+    xoff = transform[2]
+    d = transform[3]
+    e = transform[4]
+    yoff = transform[5]
+    matrix = [a, b, d, e, xoff, yoff]
+
+    return [shapely.affinity.affine_transform(p, matrix) for p in polys]
 
 
-def geojson_from_mask(mask,
-                      transform,
-                      mode='polygon',
-                      min_aspect_ratio=1.618,
-                      min_area=None,
-                      width_factor=0.5,
-                      thickness=0.001):
-    polys = geometries_from_mask(mask, transform, mode, min_aspect_ratio,
-                                 min_area, width_factor, thickness)
+def geojson_from_mask(mask, thresh, transform, mode, x_offset=0, y_offset=0, open_kernel=3, close_kernel=3, pixel_tolerence=0):
     features = []
-    for poly in polys:
-        features.append({
-            'type': 'Feature',
-            'properties': {},
-            'geometry': poly
-        })
-    return geojson.dumps(FeatureCollection(features))
+    polys = geometries_from_mask(mask, thresh, transform, mode, x_offset, y_offset, open_kernel, close_kernel, pixel_tolerence)
+    features = [Feature(p) for p in polys]
+    feature_collection = FeatureCollection(features)
+    return dumps(feature_collection, indent=2)
 
 
-def shapeley_from_mask(mask,
-                      transform,
-                      mode='polygon',
-                      min_aspect_ratio=1.618,
-                      min_area=None,
-                      width_factor=0.5,
-                      thickness=0.001):
-    polys = geometries_from_mask(mask, transform, mode, min_aspect_ratio,
-                                 min_area, width_factor, thickness)
-    return [shapely.geometry.shape(polygon) for polygon in polys]
+def shapley_from_mask(mask, thresh, transform, mode, x_offset=0, y_offset=0, open_kernel=3, close_kernel=3, pixel_tolerence=0):
+    polys = geometries_from_mask(mask, thresh, transform, mode, x_offset, y_offset, open_kernel, close_kernel, pixel_tolerence)
+    return polys
