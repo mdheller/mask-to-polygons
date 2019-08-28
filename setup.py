@@ -10,10 +10,10 @@ setup(
     license='Apache License 2.0',
     install_requires=[
         'Shapely==1.6.*',
+        'shapely-geojson==0.0.1',
         'opencv-python==3.4.*',
         'numpy>=1.0.0',
         'rasterio>=1.0.0',
-        'geojson>=2.4.0',
     ],
     packages=[
         'mask_to_polygons',
