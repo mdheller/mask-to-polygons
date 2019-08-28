@@ -30,11 +30,8 @@ def geometries_from_mask(mask, thresh, transform, mode, x_offset, y_offset, open
     elif isinstance(transform, str):
         with rasterio.open(transform, 'r') as dataset:
             transform = dataset.transform
-    elif callable(transform):
-        # Transform can be function of form f(x, y) which is assumed to convert from
-        # pixel coordinates to (lat, lng)
-        transform_fn = transform
-        transform = rasterio.transform.IDENTITY
+    else:
+        raise Exception('Bad transform')
 
     # Ensure opening kernel
     if isinstance(open_kernel, int):
@@ -44,7 +41,7 @@ def geometries_from_mask(mask, thresh, transform, mode, x_offset, y_offset, open
     elif isinstance(open_kernel, np.ndarray):
         pass
     else:
-        raise Exception()
+        raise Exception('Bad opening kernel')
 
     # Ensure closing kernel
     if isinstance(close_kernel, int):
@@ -54,7 +51,7 @@ def geometries_from_mask(mask, thresh, transform, mode, x_offset, y_offset, open
     elif isinstance(close_kernel, np.ndarray):
         pass
     else:
-        raise Exception()
+        raise Exception('Bad closing kernel')
 
     # Produce binary image
     # https://docs.opencv.org/3.4.1/d7/d1b/group__imgproc__misc.html#gae8a4a146d1ca78c626a53577199e9c57
@@ -71,7 +68,7 @@ def geometries_from_mask(mask, thresh, transform, mode, x_offset, y_offset, open
     # https://docs.opencv.org/3.4.1/d3/dc0/group__imgproc__shape.html#ga17ed9f5d79ae97bd4c7cf18403e1689a
     _, contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
 
-    # Offset the contours (correct screen space coordinates)
+    # Offset the contours (apply correct screen space coordinates)
     offset_contours = []
     for contour in contours:
         offset_contour = contour[:, 0, :]
@@ -84,7 +81,7 @@ def geometries_from_mask(mask, thresh, transform, mode, x_offset, y_offset, open
     else:
         polys = polygons_from_binary(offset_contours, hierarchy, pixel_tolerence)
 
-    # Convert from screen space -> world space
+    # Convert from screen space to world space
     a = transform[0]
     b = transform[1]
     xoff = transform[2]
