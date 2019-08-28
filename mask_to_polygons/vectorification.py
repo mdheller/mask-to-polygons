@@ -115,6 +115,6 @@ def geojson_from_mask(mask, thresh, transform, mode, x_offset=0, y_offset=0, ope
     return dumps(feature_collection, indent=2)
 
 
-def shapley_from_mask(mask, thresh, transform, mode, x_offset=0, y_offset=0, open_kernel=3, close_kernel=3, pixel_tolerence=0):
+def shapely_from_mask(mask, thresh, transform, mode, x_offset=0, y_offset=0, open_kernel=3, close_kernel=3, pixel_tolerence=0):
     polys = geometries_from_mask(mask, thresh, transform, mode, x_offset, y_offset, open_kernel, close_kernel, pixel_tolerence)
     return polys
